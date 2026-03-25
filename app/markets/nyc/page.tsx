@@ -1,108 +1,167 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+type Market = {
+  market_id: string;
+  name: string;
+  threshold: number;
+  resolution_date: string;
+  best_yes_ask: number | null;
+  best_no_ask: number | null;
+  orderbook: { side: string; contract_type: string; display_price: string; quantity: number }[];
+};
+
+type User = { user_id: string; username: string; cash_balance: number };
+
+const S = {
+  bg: "#f6f8fa",
+  surface: "#ffffff",
+  elevated: "#f0f3f6",
+  border: "#d0d7de",
+  text: "#1f2328",
+  muted: "#656d76",
+  faint: "#8c959f",
+  blue: "#0969da",
+  green: "#1a7f37",
+  red: "#cf222e",
+};
+
 export default function NYCMarket() {
+  const [user, setUser]       = useState<User | null>(null);
+  const [market, setMarket]   = useState<Market | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [contractType, setContractType] = useState<"yes" | "no">("yes");
+  const [orderType, setOrderType]       = useState<"limit" | "market">("limit");
+  const [price, setPrice]               = useState("");
+  const [quantity, setQuantity]         = useState("");
+  const [submitting, setSubmitting]     = useState(false);
+  const [error, setError]               = useState<string | null>(null);
+  const [success, setSuccess]           = useState<string | null>(null);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("user");
+    if (stored) setUser(JSON.parse(stored));
+    fetch("/api/markets").then(r => r.json()).then(data => { if (data.length > 0) setMarket(data[0]); setLoading(false); }).catch(() => setLoading(false));
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user || !market) return;
+    setSubmitting(true); setError(null); setSuccess(null);
+    const body: Record<string, unknown> = { user_id: user.user_id, market_id: market.market_id, side: "buy", contract_type: contractType, order_type: orderType, quantity: parseInt(quantity) };
+    if (orderType === "limit") body.price = parseFloat(price);
+    const res  = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) { setError(data.error ?? "Something went wrong."); } else { setSuccess("Order placed!"); setPrice(""); setQuantity(""); fetch("/api/markets").then(r => r.json()).then(d => { if (d.length > 0) setMarket(d[0]); }); }
+    setSubmitting(false);
+  }
+
+  if (loading) return <main className="min-h-screen p-8" style={{ background: S.bg, color: S.text }}><p style={{ color: S.faint }}>Loading...</p></main>;
+  if (!market) return <main className="min-h-screen p-8" style={{ background: S.bg, color: S.text }}><a href="/" style={{ color: S.muted }} className="text-sm mb-6 block">← Back</a><p style={{ color: S.faint }}>No active market.</p></main>;
+
+  const cardStyle = { background: S.surface, border: `1px solid ${S.border}` };
+  const inputStyle = { width: "100%", background: S.surface, border: `1px solid ${S.border}`, borderRadius: "4px", padding: "8px 12px", color: S.text, fontSize: "14px", outline: "none" };
+
   return (
-    <main className="min-h-screen bg-black text-white p-8">
-      
-      {/* Header */}
-      <a href="/" className="text-gray-500 text-sm mb-6 block hover:text-white">← Back</a>
-      <h1 className="text-3xl font-bold mb-1">NYC ISO — HIGHER</h1>
-      <p className="text-gray-400 text-sm mb-6">Will tomorrow's average DALMP be higher than <span className="text-white font-bold">$50.00</span>?</p>
+    <main className="min-h-screen p-8" style={{ background: S.bg, color: S.text }}>
+      <a href="/" className="text-sm mb-6 block" style={{ color: S.muted }}>← Back</a>
+      <h1 className="text-2xl font-bold mb-1">{market.name}</h1>
+      <p className="text-sm mb-6" style={{ color: S.muted }}>
+        Will the NYC average DALMP exceed <span className="font-semibold" style={{ color: S.blue }}>${market.threshold.toFixed(2)}/MWh</span>?
+      </p>
 
-      {/* Betting Line */}
-      <div className="border border-gray-800 rounded-lg p-4 mb-6">
-        <p className="text-xs text-gray-500 mb-1">Tomorrow's Betting Line (Day-Ahead Average)</p>
-        <p className="text-2xl font-bold">$50.00 / MWh</p>
+      <div className="rounded p-4 mb-5" style={cardStyle}>
+        <p className="text-xs mb-1 font-medium uppercase tracking-wide" style={{ color: S.faint }}>Betting Line</p>
+        <p className="text-2xl font-bold" style={{ color: S.blue }}>${market.threshold.toFixed(2)} <span className="text-base font-normal" style={{ color: S.muted }}>/MWh</span></p>
       </div>
 
-      {/* YES / NO Prices */}
-      <div className="flex gap-4 mb-6">
-        <div className="bg-gray-900 rounded-lg p-4 flex-1 text-center">
-          <p className="text-xs text-gray-500 mb-1">YES — Lowest Ask</p>
-          <p className="text-green-400 font-bold text-2xl">$0.60</p>
-          <p className="text-gray-500 text-xs">10 contracts available</p>
+      <div className="flex gap-3 mb-5">
+        <div className="rounded p-4 flex-1 text-center" style={cardStyle}>
+          <p className="text-xs mb-1 font-bold uppercase" style={{ color: S.green }}>YES</p>
+          <p className="font-bold text-2xl" style={{ color: S.green }}>{market.best_yes_ask ? `$${market.best_yes_ask.toFixed(2)}` : "—"}</p>
+          <p className="text-xs mt-1" style={{ color: S.faint }}>best ask</p>
         </div>
-        <div className="bg-gray-900 rounded-lg p-4 flex-1 text-center">
-          <p className="text-xs text-gray-500 mb-1">NO — Lowest Ask</p>
-          <p className="text-red-400 font-bold text-2xl">$0.40</p>
-          <p className="text-gray-500 text-xs">100 contracts available</p>
+        <div className="rounded p-4 flex-1 text-center" style={cardStyle}>
+          <p className="text-xs mb-1 font-bold uppercase" style={{ color: S.red }}>NO</p>
+          <p className="font-bold text-2xl" style={{ color: S.red }}>{market.best_no_ask ? `$${market.best_no_ask.toFixed(2)}` : "—"}</p>
+          <p className="text-xs mt-1" style={{ color: S.faint }}>best ask</p>
         </div>
       </div>
 
-      {/* Order Entry */}
-      <div className="border border-gray-800 rounded-lg p-6 mb-6">
-        <h2 className="text-lg font-semibold mb-4">Place Order</h2>
-        <div className="flex gap-2 mb-4">
-          <button className="bg-green-700 text-white px-4 py-2 rounded font-semibold flex-1">BUY YES</button>
-          <button className="bg-red-700 text-white px-4 py-2 rounded font-semibold flex-1">BUY NO</button>
-        </div>
-        <div className="flex gap-4 mb-4">
-          <div className="flex-1">
-            <p className="text-xs text-gray-500 mb-1">Price ($)</p>
-            <input className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white" placeholder="0.60" />
+      {user ? (
+        <div className="rounded p-5 mb-5" style={cardStyle}>
+          <h2 className="text-xs font-bold uppercase tracking-wide mb-4" style={{ color: S.faint }}>Place Order</h2>
+          <div className="flex gap-2 mb-4">
+            {(["yes", "no"] as const).map(t => (
+              <button key={t} type="button" onClick={() => setContractType(t)} className="flex-1 py-2 rounded text-sm font-bold transition-colors"
+                style={{ background: contractType === t ? (t === "yes" ? S.green : S.red) : S.elevated, color: contractType === t ? "#000" : S.muted, border: `1px solid ${contractType === t ? (t === "yes" ? S.green : S.red) : S.border}` }}>
+                BUY {t.toUpperCase()}
+              </button>
+            ))}
           </div>
-          <div className="flex-1">
-            <p className="text-xs text-gray-500 mb-1">Size (contracts)</p>
-            <input className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white" placeholder="10" />
-          </div>
+          <form onSubmit={handleSubmit}>
+            <div className="flex gap-3 mb-4">
+              {orderType === "limit" && (
+                <div className="flex-1">
+                  <p className="text-xs mb-1" style={{ color: S.muted }}>Price ($)</p>
+                  <input type="number" step="0.01" min="0.01" max="0.99" value={price} onChange={e => setPrice(e.target.value)} required style={inputStyle} placeholder="0.55" />
+                </div>
+              )}
+              <div className="flex-1">
+                <p className="text-xs mb-1" style={{ color: S.muted }}>Size (contracts)</p>
+                <input type="number" min="1" step="1" value={quantity} onChange={e => setQuantity(e.target.value)} required style={inputStyle} placeholder="10" />
+              </div>
+            </div>
+            <div className="flex gap-2 mb-4">
+              {(["limit", "market"] as const).map(t => (
+                <button key={t} type="button" onClick={() => setOrderType(t)} className="flex-1 py-1.5 rounded text-sm transition-colors capitalize"
+                  style={{ background: orderType === t ? S.blue : S.elevated, color: orderType === t ? "#000" : S.muted, border: `1px solid ${orderType === t ? S.blue : S.border}` }}>
+                  {t}
+                </button>
+              ))}
+            </div>
+            {error   && <p className="text-sm mb-3" style={{ color: S.red }}>{error}</p>}
+            {success && <p className="text-sm mb-3" style={{ color: S.green }}>{success}</p>}
+            <button type="submit" disabled={submitting} className="w-full py-2 rounded font-bold text-sm disabled:opacity-50" style={{ background: S.blue, color: "#ffffff" }}>
+              {submitting ? "Placing..." : `Place ${orderType} — BUY ${contractType.toUpperCase()}`}
+            </button>
+          </form>
         </div>
-        <div className="flex gap-2">
-          <button className="bg-gray-800 text-white px-4 py-2 rounded text-sm flex-1">Limit Order</button>
-          <button className="bg-gray-700 text-white px-4 py-2 rounded text-sm flex-1">Market Order</button>
+      ) : (
+        <div className="rounded p-5 mb-5 text-center" style={cardStyle}>
+          <p className="text-sm mb-3" style={{ color: S.muted }}>Sign in to place orders.</p>
+          <a href="/login" className="inline-block px-4 py-2 rounded font-bold text-sm" style={{ background: S.blue, color: "#ffffff" }}>Sign In</a>
         </div>
-      </div>
+      )}
 
-      {/* Orderbook */}
-      <div className="border border-gray-800 rounded-lg p-6">
-        <h2 className="text-lg font-semibold mb-4">Order Book</h2>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-gray-500 text-xs border-b border-gray-800">
-              <th className="text-left pb-2">Direction</th>
-              <th className="text-left pb-2">Position</th>
-              <th className="text-left pb-2">Price</th>
-              <th className="text-left pb-2">Size</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="border-b border-gray-900 py-2">
-              <td className="py-2 text-green-400">BUY</td>
-              <td className="py-2">YES</td>
-              <td className="py-2">$0.55</td>
-              <td className="py-2">20</td>
-            </tr>
-            <tr className="border-b border-gray-900 py-2">
-              <td className="py-2 text-green-400">BUY</td>
-              <td className="py-2">YES</td>
-              <td className="py-2">$0.50</td>
-              <td className="py-2">10</td>
-            </tr>
-            <tr className="border-b border-gray-900 py-2">
-              <td className="py-2 text-red-400">SELL</td>
-              <td className="py-2">YES</td>
-              <td className="py-2">$0.60</td>
-              <td className="py-2">10</td>
-            </tr>
-            <tr className="border-b border-gray-900 py-2">
-              <td className="py-2 text-red-400">SELL</td>
-              <td className="py-2">YES</td>
-              <td className="py-2">$0.61</td>
-              <td className="py-2">10</td>
-            </tr>
-            <tr className="border-b border-gray-900 py-2">
-              <td className="py-2 text-green-400">BUY</td>
-              <td className="py-2">NO</td>
-              <td className="py-2">$0.30</td>
-              <td className="py-2">100</td>
-            </tr>
-            <tr className="border-b border-gray-900 py-2">
-              <td className="py-2 text-green-400">BUY</td>
-              <td className="py-2">NO</td>
-              <td className="py-2">$0.20</td>
-              <td className="py-2">100</td>
-            </tr>
-          </tbody>
-        </table>
+      <div className="rounded p-5" style={cardStyle}>
+        <h2 className="text-xs font-bold uppercase tracking-wide mb-4" style={{ color: S.faint }}>Order Book</h2>
+        {market.orderbook.length === 0 ? (
+          <p className="text-sm" style={{ color: S.faint }}>No resting orders.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: S.faint, borderBottom: `1px solid ${S.border}` }}>
+                <th className="text-left pb-2 text-xs font-medium">Action</th>
+                <th className="text-left pb-2 text-xs font-medium">Contract</th>
+                <th className="text-left pb-2 text-xs font-medium">Price</th>
+                <th className="text-left pb-2 text-xs font-medium">Size</th>
+              </tr>
+            </thead>
+            <tbody>
+              {market.orderbook.map((o, i) => (
+                <tr key={i} style={{ borderBottom: `1px solid ${S.elevated}` }}>
+                  <td className="py-2 font-bold" style={{ color: o.side === "buy" ? S.green : S.red }}>{o.side.toUpperCase()}</td>
+                  <td className="py-2" style={{ color: S.text }}>{o.contract_type.toUpperCase()}</td>
+                  <td className="py-2" style={{ color: S.blue }}>${o.display_price}</td>
+                  <td className="py-2" style={{ color: S.muted }}>{o.quantity}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
-
     </main>
-  )
+  );
 }

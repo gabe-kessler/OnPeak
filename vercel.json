@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "app/api/cron/create-market/route.ts":         { "maxDuration": 30 },
+    "app/api/cron/create-market-bayarea/route.ts": { "maxDuration": 30 },
+    "app/api/cron/settle-market/route.ts":         { "maxDuration": 60 },
+    "app/api/prices/all/route.ts":                 { "maxDuration": 30 }
+  }
+}

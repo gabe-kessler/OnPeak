@@ -1,43 +1,69 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+
+const S = {
+  bg: "#000000",
+  surface: "#0f0f0f",
+  elevated: "#1a1a1a",
+  border: "#222222",
+  text: "#ffffff",
+  muted: "#888888",
+  faint: "#555555",
+  orange: "#ff6600",
+  red: "#ff3d3d",
+};
+
 export default function Login() {
+  const router = useRouter();
+  const [email, setEmail]       = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError]       = useState("");
+  const [loading, setLoading]   = useState(false);
+
+  async function handleSubmit(e: { preventDefault: () => void }) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    const res  = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+    const data = await res.json();
+    setLoading(false);
+    if (!res.ok) { setError(data.error || "Something went wrong."); return; }
+    localStorage.setItem("user", JSON.stringify(data.user));
+    router.push("/");
+  }
+
+  const inputStyle = {
+    width: "100%", background: S.elevated, border: `1px solid ${S.border}`,
+    borderRadius: "4px", padding: "8px 12px", color: S.text, fontSize: "14px", outline: "none",
+  };
+
   return (
-    <main className="min-h-screen bg-black text-white flex items-center justify-center p-8">
-      <div className="w-full max-w-md">
-        
-        <a href="/" className="text-gray-500 text-sm mb-8 block hover:text-white">← Back</a>
-        <h1 className="text-3xl font-bold mb-2">Sign In</h1>
-        <p className="text-gray-400 mb-8">Welcome back to Power Bet</p>
+    <main className="min-h-screen flex items-center justify-center p-8" style={{ background: S.bg, color: S.text }}>
+      <div className="w-full max-w-sm">
+        <a href="/" className="text-sm mb-8 block" style={{ color: S.muted }}>← Back</a>
+        <h1 className="text-2xl font-bold mb-1">Sign in</h1>
+        <p className="text-sm mb-6" style={{ color: S.muted }}>Welcome back to OnPeak</p>
 
-        <div className="border border-gray-800 rounded-lg p-6">
-          
+        <form onSubmit={handleSubmit} className="rounded p-6" style={{ background: S.surface, border: `1px solid ${S.border}` }}>
           <div className="mb-4">
-            <p className="text-xs text-gray-500 mb-1">Email</p>
-            <input 
-              className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white" 
-              placeholder="you@example.com" 
-              type="email"
-            />
+            <label className="text-xs font-medium mb-1.5 block" style={{ color: S.muted }}>Email</label>
+            <input style={inputStyle} placeholder="you@example.com" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
-
-          <div className="mb-6">
-            <p className="text-xs text-gray-500 mb-1">Password</p>
-            <input 
-              className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-white" 
-              placeholder="••••••••" 
-              type="password"
-            />
+          <div className="mb-5">
+            <label className="text-xs font-medium mb-1.5 block" style={{ color: S.muted }}>Password</label>
+            <input style={inputStyle} placeholder="••••••••" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </div>
-
-          <button className="w-full bg-white text-black font-bold py-2 rounded hover:bg-gray-200 transition mb-4">
-            Sign In
+          {error && <p className="text-sm mb-4" style={{ color: S.red }}>{error}</p>}
+          <button type="submit" disabled={loading} className="w-full py-2 rounded font-bold text-sm mb-4 disabled:opacity-50 transition-colors" style={{ background: S.orange, color: "#000000" }}>
+            {loading ? "Signing in..." : "Sign in"}
           </button>
-
-          <p className="text-center text-gray-500 text-sm">
-            Don't have an account?{" "}
-            <a href="/register" className="text-white hover:underline">Register</a>
+          <p className="text-center text-sm" style={{ color: S.faint }}>
+            No account?{" "}<a href="/register" style={{ color: S.orange }}>Register</a>
           </p>
-
-        </div>
+        </form>
       </div>
     </main>
-  )
+  );
 }

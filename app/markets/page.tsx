@@ -25,7 +25,7 @@ const S = {
   red: "#cf222e",
 };
 
-export default function Home() {
+export default function MarketsPage() {
   const [markets, setMarkets] = useState<Market[]>([]);
 
   useEffect(() => {
@@ -37,8 +37,8 @@ export default function Home() {
 
   return (
     <main className="min-h-screen p-8" style={{ background: S.bg, color: S.text }}>
-      <h1 className="text-3xl font-bold mb-1">OnPeak</h1>
-      <p className="text-sm mb-8" style={{ color: S.muted }}>Predict energy prices. Trade the grid.</p>
+      <h1 className="text-2xl font-bold mb-1">Markets</h1>
+      <p className="text-sm mb-8" style={{ color: S.muted }}>Active prediction markets for today's operating day.</p>
 
       {markets.length === 0 ? (
         <p className="text-sm" style={{ color: S.faint }}>No active markets.</p>
@@ -55,7 +55,7 @@ export default function Home() {
             >
               <h2 className="text-base font-semibold mb-1">{m.name}</h2>
               <p className="text-sm mb-4" style={{ color: S.muted }}>
-                Will the average RT LBMP exceed ${m.threshold.toFixed(2)}/MWh?
+                Will the average RT price exceed ${m.threshold.toFixed(2)}/MWh?
               </p>
               <div className="flex gap-3">
                 <div className="rounded p-3 flex-1 text-center" style={{ background: S.elevated, border: `1px solid ${S.border}` }}>
