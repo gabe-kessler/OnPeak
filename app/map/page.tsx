@@ -291,6 +291,13 @@ export default function MapPage() {
     if (cur > 0) setSelectedSlot(cur - 1);
   }
 
+  function stepForward() {
+    if (isAtLatest) return;
+    const next = selectedSlot + 1;
+    if (next >= latestSlot) setSelectedSlot(-1);
+    else setSelectedSlot(next);
+  }
+
   // ── live date/time label (right side of slider) ───────────────────────────────
 
   const dateLabel = isAtLatest
@@ -424,6 +431,17 @@ export default function MapPage() {
                     }}
                   />
                 </div>
+
+                {/* Step forward — hidden at LIVE so track width stays constant */}
+                <button
+                  onClick={stepForward}
+                  disabled={isAtLatest}
+                  className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded disabled:opacity-30"
+                  style={{
+                    background: S.elevated, border: `1px solid ${S.border}`, color: S.muted,
+                    fontSize: "11px", visibility: isAtLatest ? "hidden" : "visible",
+                  }}
+                >▶</button>
 
                 {/* LIVE — always in layout so track width stays constant */}
                 <button
