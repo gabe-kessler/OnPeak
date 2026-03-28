@@ -85,14 +85,14 @@ async function fetchNYCData(yyyymmdd: string): Promise<{ prices: HourPrices; loa
   // --- 5-min prices ---
   const pLines  = (await priceResp.text()).trim().split("\n");
   const pHeader = pLines[0].split(",");
-  const pName   = pHeader.findIndex((h) => h.replace(/"/g, "").trim().toLowerCase() === "name");
-  const pLbmp   = pHeader.findIndex((h) => h.replace(/"/g, "").trim().toLowerCase().startsWith("lbmp"));
-  if (pName === -1 || pLbmp === -1) throw new Error(`Unexpected NYISO RT CSV format. Header: ${pLines[0]?.slice(0, 200)}`);
+  const pName   = pHeader.findIndex((h) => h.trim().toLowerCase() === "name");
+  const pLbmp   = pHeader.findIndex((h) => h.trim().toLowerCase().startsWith("lbmp"));
+  if (pName === -1 || pLbmp === -1) throw new Error("Unexpected NYISO RT CSV format");
 
   const prices: HourPrices = new Map();
   for (let i = 1; i < pLines.length; i++) {
     const cols = pLines[i].split(",");
-    if (cols[pName]?.replace(/"/g, "").trim().toLowerCase() !== "n.y.c.") continue;
+    if (cols[pName]?.trim().toLowerCase() !== "n.y.c.") continue;
     const price = parseFloat(cols[pLbmp]?.trim());
     const hour  = nyisoHour(cols[0]?.trim() ?? "");
     if (isNaN(price) || hour === null) continue;
@@ -106,12 +106,12 @@ async function fetchNYCData(yyyymmdd: string): Promise<{ prices: HourPrices; loa
   if (loadResp.ok) {
     const lLines  = (await loadResp.text()).trim().split("\n");
     const lHeader = lLines[0].split(",");
-    const lName   = lHeader.findIndex((h) => h.replace(/"/g, "").trim().toLowerCase() === "name");
-    const lLoad   = lHeader.findIndex((h) => h.replace(/"/g, "").trim().toLowerCase() === "load");
+    const lName   = lHeader.findIndex((h) => h.trim().toLowerCase() === "name");
+    const lLoad   = lHeader.findIndex((h) => h.trim().toLowerCase() === "load");
     if (lName !== -1 && lLoad !== -1) {
       for (let i = 1; i < lLines.length; i++) {
         const cols = lLines[i].split(",");
-        if (cols[lName]?.replace(/"/g, "").trim().toLowerCase() !== "n.y.c.") continue;
+        if (cols[lName]?.trim().toLowerCase() !== "n.y.c.") continue;
         const mw   = parseFloat(cols[lLoad]?.trim());
         const hour = nyisoHour(cols[0]?.trim() ?? "");
         if (!isNaN(mw) && hour !== null) loads.set(hour, mw);
@@ -266,7 +266,7 @@ async function settleMarket(node: string, displayDate: string, settlementValue: 
 // ── handler ───────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
-  if (process.env.CRON_SECRET && req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
+  if (req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
