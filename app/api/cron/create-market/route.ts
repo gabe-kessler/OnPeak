@@ -19,14 +19,15 @@ async function fetchNYCThreshold(yyyymmdd: string): Promise<number> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`NYISO DAM HTTP ${resp.status}`);
   const lines  = (await resp.text()).trim().split("\n");
+  const strip  = (s: string) => s.trim().replace(/"/g, "");
   const header = lines[0].split(",");
-  const nameIdx = header.findIndex((h) => h.trim().toLowerCase() === "name");
-  const lbmpIdx = header.findIndex((h) => h.trim().toLowerCase().startsWith("lbmp"));
+  const nameIdx = header.findIndex((h) => strip(h).toLowerCase() === "name");
+  const lbmpIdx = header.findIndex((h) => strip(h).toLowerCase().startsWith("lbmp"));
   if (nameIdx === -1 || lbmpIdx === -1) throw new Error("Unexpected NYISO DAM CSV format");
   const prices: number[] = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(",");
-    if (cols[nameIdx]?.trim().toLowerCase() !== "n.y.c.") continue;
+    if (strip(cols[nameIdx] ?? "").toLowerCase() !== "n.y.c.") continue;
     const p = parseFloat(cols[lbmpIdx]?.trim());
     if (!isNaN(p)) prices.push(p);
   }
@@ -83,7 +84,7 @@ async function upsertMarket(
 // ── handler ───────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
-  if (req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
+  if (process.env.CRON_SECRET && req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {

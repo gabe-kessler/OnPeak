@@ -48,7 +48,7 @@ async function fetchBayAreaThreshold(yyyymmdd: string): Promise<number> {
 }
 
 export async function POST(req: Request) {
-  if (req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
+  if (process.env.CRON_SECRET && req.headers.get("x-cron-secret") !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {

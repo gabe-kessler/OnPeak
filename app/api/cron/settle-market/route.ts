@@ -5,45 +5,22 @@ import AdmZip from "adm-zip";
 // POST /api/cron/settle-market
 // Called at 12:05 AM ET each day.
 //
-// Settlement uses a Load-Weighted Average Price (LWAP):
-//   LWAP = Σ(hourly_avg_price × hourly_load) / Σ(hourly_load)
-//
-// This weights each hour's price by how much energy was actually consumed that
-// hour, matching how real ISO financial products settle. If load data is
-// unavailable for an ISO, we fall back to a simple arithmetic average.
+// Settlement uses a simple arithmetic average of all 5-minute RT prices.
 //
 // Price sources:
 //   NYC      — NYISO public RT daily zone CSV  (5-min intervals)
 //   Boston   — ISO-NE public RT prelim CSV     (hourly, HE 1-24)
 //   Bay Area — CAISO OASIS PRC_INTVL_LMP RTM  (5-min intervals)
-//
-// Load sources  (hourly MW):
-//   NYC      — NYISO public PAL zone CSV       (projected area load, fallback to simple avg)
-//   Boston   — none (no public source; falls back to simple average)
-//   Bay Area — CAISO OASIS SLD_FCST ACTUAL     (5-min intervals averaged per hour)
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
-// Map of operating-hour (0-23) → { sum of 5-min prices, count }
+// Map of operating-hour (0-23) → { sum of prices, count }
 type HourPrices = Map<number, { sum: number; count: number }>;
-// Map of operating-hour (0-23) → load in MW
-type HourLoads  = Map<number, number>;
 
-// Load-weighted average price. Falls back to simple average if all loads = 0.
-function lwap(prices: HourPrices, loads: HourLoads): number {
-  let weightedSum = 0;
-  let totalLoad   = 0;
-  for (const [h, { sum, count }] of prices) {
-    const avgPrice = sum / count;
-    const load     = loads.get(h) ?? 0;
-    weightedSum   += avgPrice * load;
-    totalLoad     += load;
-  }
-  if (totalLoad > 0) return weightedSum / totalLoad;
-  // Fallback: simple average across all intervals
-  let priceSum = 0, priceCount = 0;
-  for (const { sum, count } of prices.values()) { priceSum += sum; priceCount += count; }
-  return priceCount > 0 ? priceSum / priceCount : 0;
+function simpleAvg(prices: HourPrices): number {
+  let sum = 0, count = 0;
+  for (const { sum: s, count: c } of prices.values()) { sum += s; count += c; }
+  return count > 0 ? sum / count : 0;
 }
 
 function ptOffset(): number {
@@ -67,32 +44,23 @@ function nyisoHour(ts: string): number | null {
   return m ? parseInt(m[1]) : null;
 }
 
-// Extract hour 0-23 from ISO8601 timestamp (uses local wall-clock hour)
-function isoHour(ts: string): number | null {
-  try { return new Date(ts).getHours(); } catch { return null; }
-}
+// ── NYC: NYISO 5-min RT prices ────────────────────────────────────────────────
 
-// ── NYC: NYISO prices + PAL load ──────────────────────────────────────────────
+async function fetchNYCPrices(yyyymmdd: string): Promise<HourPrices> {
+  const resp = await fetch(`https://mis.nyiso.com/public/csv/realtime/${yyyymmdd}realtime_zone.csv`);
+  if (!resp.ok) throw new Error(`NYISO RT HTTP ${resp.status}`);
 
-async function fetchNYCData(yyyymmdd: string): Promise<{ prices: HourPrices; loads: HourLoads }> {
-  const [priceResp, loadResp] = await Promise.all([
-    fetch(`https://mis.nyiso.com/public/csv/realtime/${yyyymmdd}realtime_zone.csv`),
-    fetch(`https://mis.nyiso.com/public/csv/pal/${yyyymmdd}pal_zone.csv`),
-  ]);
-
-  if (!priceResp.ok) throw new Error(`NYISO RT HTTP ${priceResp.status}`);
-
-  // --- 5-min prices ---
-  const pLines  = (await priceResp.text()).trim().split("\n");
+  const pLines  = (await resp.text()).trim().split("\n");
+  const strip   = (s: string) => s.trim().replace(/"/g, "");
   const pHeader = pLines[0].split(",");
-  const pName   = pHeader.findIndex((h) => h.trim().toLowerCase() === "name");
-  const pLbmp   = pHeader.findIndex((h) => h.trim().toLowerCase().startsWith("lbmp"));
+  const pName   = pHeader.findIndex((h) => strip(h).toLowerCase() === "name");
+  const pLbmp   = pHeader.findIndex((h) => strip(h).toLowerCase().startsWith("lbmp"));
   if (pName === -1 || pLbmp === -1) throw new Error("Unexpected NYISO RT CSV format");
 
   const prices: HourPrices = new Map();
   for (let i = 1; i < pLines.length; i++) {
     const cols = pLines[i].split(",");
-    if (cols[pName]?.trim().toLowerCase() !== "n.y.c.") continue;
+    if (strip(cols[pName] ?? "").toLowerCase() !== "n.y.c.") continue;
     const price = parseFloat(cols[pLbmp]?.trim());
     const hour  = nyisoHour(cols[0]?.trim() ?? "");
     if (isNaN(price) || hour === null) continue;
@@ -100,34 +68,15 @@ async function fetchNYCData(yyyymmdd: string): Promise<{ prices: HourPrices; loa
     prices.set(hour, { sum: bucket.sum + price, count: bucket.count + 1 });
   }
   if (prices.size === 0) throw new Error("No NYC price rows in NYISO RT CSV");
-
-  // --- hourly PAL load ---
-  const loads: HourLoads = new Map();
-  if (loadResp.ok) {
-    const lLines  = (await loadResp.text()).trim().split("\n");
-    const lHeader = lLines[0].split(",");
-    const lName   = lHeader.findIndex((h) => h.trim().toLowerCase() === "name");
-    const lLoad   = lHeader.findIndex((h) => h.trim().toLowerCase() === "load");
-    if (lName !== -1 && lLoad !== -1) {
-      for (let i = 1; i < lLines.length; i++) {
-        const cols = lLines[i].split(",");
-        if (cols[lName]?.trim().toLowerCase() !== "n.y.c.") continue;
-        const mw   = parseFloat(cols[lLoad]?.trim());
-        const hour = nyisoHour(cols[0]?.trim() ?? "");
-        if (!isNaN(mw) && hour !== null) loads.set(hour, mw);
-      }
-    }
-  }
-
-  return { prices, loads };
+  return prices;
 }
 
-// ── Boston: ISO-NE prices (public RT prelim CSV) ──────────────────────────────
+// ── Boston: ISO-NE hourly RT prices ──────────────────────────────────────────
 // URL: https://www.iso-ne.com/static-transform/csv/histRpts/rt-lmp/lmp_rt_prelim_{YYYYMMDD}.csv
 // Columns: "D","MM/DD/YYYY","HE","LocationName",LMP,Energy,Congestion,Loss
-// HE = Hour Ending 1–24; one row per location per hour; no public load data.
+// HE = Hour Ending 1–24; one row per location per hour.
 
-async function fetchBostonData(yyyymmdd: string): Promise<{ prices: HourPrices; loads: HourLoads }> {
+async function fetchBostonPrices(yyyymmdd: string): Promise<HourPrices> {
   const url  = `https://www.iso-ne.com/static-transform/csv/histRpts/rt-lmp/lmp_rt_prelim_${yyyymmdd}.csv`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`ISO-NE RT HTTP ${resp.status}`);
@@ -140,18 +89,17 @@ async function fetchBostonData(yyyymmdd: string): Promise<{ prices: HourPrices; 
     const he   = parseInt(cols[2]?.trim());
     const lmp  = parseFloat(cols[4]?.trim());
     if (isNaN(he) || isNaN(lmp)) continue;
-    const hour   = he - 1; // HE 1 = hour 0 (midnight–1 AM)
+    const hour   = he - 1;
     const bucket = prices.get(hour) ?? { sum: 0, count: 0 };
     prices.set(hour, { sum: bucket.sum + lmp, count: bucket.count + 1 });
   }
   if (prices.size === 0) throw new Error("No NEMASSBOST rows in ISO-NE RT CSV");
-
-  return { prices, loads: new Map() }; // no public load data; lwap() falls back to simple avg
+  return prices;
 }
 
-// ── Bay Area: CAISO prices + actual system demand ─────────────────────────────
+// ── Bay Area: CAISO 5-min RT prices ──────────────────────────────────────────
 
-async function fetchBayAreaData(yyyymmdd: string): Promise<{ prices: HourPrices; loads: HourLoads }> {
+async function fetchBayAreaPrices(yyyymmdd: string): Promise<HourPrices> {
   const offset = ptOffset();
   const y  = yyyymmdd.slice(0, 4);
   const m  = yyyymmdd.slice(4, 6);
@@ -162,62 +110,27 @@ async function fetchBayAreaData(yyyymmdd: string): Promise<{ prices: HourPrices;
     `&startdatetime=${y}${m}${d}T00:00${tz}&enddatetime=${y}${m}${d}T23:55${tz}` +
     `&version=1&market_run_id=RTM&node=TH_NP15_GEN-APND&resultformat=6`;
 
-  const loadUrl = `http://oasis.caiso.com/oasisapi/SingleZip?queryname=SLD_FCST` +
-    `&startdatetime=${y}${m}${d}T00:00${tz}&enddatetime=${y}${m}${d}T23:55${tz}` +
-    `&version=1&market_run_id=ACTUAL&resultformat=6`;
-
-  const [priceCsv, loadResult] = await Promise.all([
-    unzipCAISO(priceUrl),
-    unzipCAISO(loadUrl).catch(() => null), // load fetch failure is non-fatal
-  ]);
-
-  // --- 5-min prices ---
-  const pLines  = priceCsv.trim().split("\n");
-  const pHeader = pLines[0].split(",").map((h) => h.trim());
-  const ltIdx   = pHeader.indexOf("LMP_TYPE");
-  const mwIdx   = pHeader.indexOf("MW");
-  const hrIdx   = pHeader.indexOf("OPR_HR");
+  const priceCsv = await unzipCAISO(priceUrl);
+  const pLines   = priceCsv.trim().split("\n");
+  const pHeader  = pLines[0].split(",").map((h) => h.trim());
+  const ltIdx    = pHeader.indexOf("LMP_TYPE");
+  const mwIdx    = pHeader.indexOf("MW");
+  const hrIdx    = pHeader.indexOf("OPR_HR");
   if (ltIdx === -1 || mwIdx === -1 || hrIdx === -1) throw new Error("Unexpected CAISO price CSV format");
 
   const prices: HourPrices = new Map();
   for (let i = 1; i < pLines.length; i++) {
-    const cols = pLines[i].split(",");
+    const cols  = pLines[i].split(",");
     if (cols[ltIdx]?.trim() !== "LMP") continue;
-    const price   = parseFloat(cols[mwIdx]?.trim());
-    const oprHr   = parseInt(cols[hrIdx]?.trim() ?? "0");
-    const hour    = oprHr - 1; // OPR_HR is 1-indexed; convert to 0-23
+    const price = parseFloat(cols[mwIdx]?.trim());
+    const oprHr = parseInt(cols[hrIdx]?.trim() ?? "0");
+    const hour  = oprHr - 1;
     if (isNaN(price) || oprHr < 1) continue;
-    const bucket  = prices.get(hour) ?? { sum: 0, count: 0 };
+    const bucket = prices.get(hour) ?? { sum: 0, count: 0 };
     prices.set(hour, { sum: bucket.sum + price, count: bucket.count + 1 });
   }
   if (prices.size === 0) throw new Error("No Bay Area price rows in CAISO CSV");
-
-  // --- 5-min actual system demand → hourly averages ---
-  const loads: HourLoads = new Map();
-  if (loadResult) {
-    const lLines  = loadResult.trim().split("\n");
-    const lHeader = lLines[0].split(",").map((h) => h.trim());
-    const lMwIdx  = lHeader.indexOf("MW");
-    const lHrIdx  = lHeader.indexOf("OPR_HR");
-    if (lMwIdx !== -1 && lHrIdx !== -1) {
-      // Accumulate 5-min intervals per hour, then average to get hourly load
-      const hourBuckets = new Map<number, { sum: number; count: number }>();
-      for (let i = 1; i < lLines.length; i++) {
-        const cols  = lLines[i].split(",");
-        const mw    = parseFloat(cols[lMwIdx]?.trim());
-        const oprHr = parseInt(cols[lHrIdx]?.trim() ?? "0");
-        const hour  = oprHr - 1;
-        if (isNaN(mw) || oprHr < 1) continue;
-        const b = hourBuckets.get(hour) ?? { sum: 0, count: 0 };
-        hourBuckets.set(hour, { sum: b.sum + mw, count: b.count + 1 });
-      }
-      for (const [h, { sum, count }] of hourBuckets) {
-        loads.set(h, sum / count);
-      }
-    }
-  }
-
-  return { prices, loads };
+  return prices;
 }
 
 // ── settlement DB helper ──────────────────────────────────────────────────────
@@ -276,47 +189,24 @@ export async function POST(req: Request) {
     const yyyymmdd    = yesterday.toISOString().slice(0, 10).replace(/-/g, "");
     const displayDate = yesterday.toISOString().slice(0, 10);
 
-    // Fetch price + load data for all 3 nodes in parallel
-    const [nycDataR, bostonDataR, bayAreaDataR] = await Promise.allSettled([
-      fetchNYCData(yyyymmdd),
-      fetchBostonData(yyyymmdd),
-      fetchBayAreaData(yyyymmdd),
-    ]);
-
-    // Compute LWAP and settle each market
     const [nycR, bostonR, bayAreaR] = await Promise.allSettled([
-      nycDataR.status === "fulfilled"
-        ? settleMarket("N.Y.C.", displayDate,
-            lwap(nycDataR.value.prices, nycDataR.value.loads))
-        : Promise.reject(nycDataR.reason),
-      bostonDataR.status === "fulfilled"
-        ? settleMarket(".Z.NEMASSBOST", displayDate,
-            lwap(bostonDataR.value.prices, bostonDataR.value.loads))
-        : Promise.reject(bostonDataR.reason),
-      bayAreaDataR.status === "fulfilled"
-        ? settleMarket("TH_NP15_GEN-APND", displayDate,
-            lwap(bayAreaDataR.value.prices, bayAreaDataR.value.loads))
-        : Promise.reject(bayAreaDataR.reason),
+      fetchNYCPrices(yyyymmdd).then(p => settleMarket("N.Y.C.",           displayDate, simpleAvg(p))),
+      fetchBostonPrices(yyyymmdd).then(p => settleMarket(".Z.NEMASSBOST", displayDate, simpleAvg(p))),
+      fetchBayAreaPrices(yyyymmdd).then(p => settleMarket("TH_NP15_GEN-APND", displayDate, simpleAvg(p))),
     ]);
 
-    // Build response — include load availability info for observability
-    function summary(dataR: typeof nycDataR, settleR: typeof nycR) {
-      if (settleR.status === "fulfilled") {
-        const loadCount = dataR.status === "fulfilled"
-          ? dataR.value.loads.size : 0;
-        return { ...settleR.value, load_hours_used: loadCount };
-      }
-      return { error: String(settleR.reason) };
+    function summary(r: typeof nycR) {
+      return r.status === "fulfilled" ? r.value : { error: String(r.reason) };
     }
 
     return NextResponse.json({
       success: true,
       date: displayDate,
-      method: "lwap",
+      method: "simple_avg",
       markets: {
-        nyc:     summary(nycDataR,     nycR),
-        boston:  summary(bostonDataR,  bostonR),
-        bayArea: summary(bayAreaDataR, bayAreaR),
+        nyc:     summary(nycR),
+        boston:  summary(bostonR),
+        bayArea: summary(bayAreaR),
       },
     });
   } catch (err) {
