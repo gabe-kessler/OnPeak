@@ -91,7 +91,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ success: true, date: displayDate, threshold });
   } catch (err) {
-    console.error("create-market-bayarea error:", err);
-    return NextResponse.json({ error: "Server error." }, { status: 500 });
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("create-market-bayarea error:", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
