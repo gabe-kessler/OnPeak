@@ -40,7 +40,7 @@ async function fetchBayAreaThreshold(yyyymmdd: string): Promise<number> {
   const header = lines[0].split(",").map((h) => h.trim());
   const ltIdx  = header.indexOf("LMP_TYPE");
   const mwIdx  = header.indexOf("MW");
-  if (ltIdx === -1 || mwIdx === -1) throw new Error("Unexpected CAISO DAM CSV format");
+  if (ltIdx === -1 || mwIdx === -1) throw new Error(`Unexpected CAISO DAM CSV format. Headers: ${lines[0]}`);
 
   const prices: number[] = [];
   for (let i = 1; i < lines.length; i++) {
