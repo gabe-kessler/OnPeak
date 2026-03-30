@@ -42,7 +42,7 @@ async function fetchBayAreaThreshold(yyyymmdd: string): Promise<number> {
   const header = lines[0].split(",").map((h) => h.trim());
   const ltIdx  = header.indexOf("LMP_TYPE");
   const mwIdx  = header.indexOf("MW");
-  if (ltIdx === -1 || mwIdx === -1) throw new Error(`Unexpected CAISO DAM CSV format. First 3000 chars: ${csv.slice(0, 3000)}`);
+  if (ltIdx === -1 || mwIdx === -1) throw new Error("Unexpected CAISO DAM CSV format");
 
   const prices: number[] = [];
   for (let i = 1; i < lines.length; i++) {
@@ -60,14 +60,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
-    const now      = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const yyyymmdd    = tomorrow.toISOString().slice(0, 10).replace(/-/g, "");
-    const displayDate = tomorrow.toISOString().slice(0, 10);
-    const humanDate   = new Intl.DateTimeFormat("en-US", {
-      month: "long", day: "numeric", year: "numeric",
-    }).format(tomorrow);
+    // Optional ?date=YYYY-MM-DD override for manual backfill
+    const url          = new URL(req.url);
+    const dateOverride = url.searchParams.get("date");
+
+    let displayDate: string;
+    let yyyymmdd: string;
+    let humanDate: string;
+
+    if (dateOverride && /^\d{4}-\d{2}-\d{2}$/.test(dateOverride)) {
+      displayDate = dateOverride;
+      yyyymmdd    = dateOverride.replace(/-/g, "");
+      humanDate   = new Intl.DateTimeFormat("en-US", {
+        month: "long", day: "numeric", year: "numeric",
+      }).format(new Date(dateOverride + "T12:00:00Z"));
+    } else {
+      const now      = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      yyyymmdd    = tomorrow.toISOString().slice(0, 10).replace(/-/g, "");
+      displayDate = tomorrow.toISOString().slice(0, 10);
+      humanDate   = new Intl.DateTimeFormat("en-US", {
+        month: "long", day: "numeric", year: "numeric",
+      }).format(tomorrow);
+    }
 
     const existing = await pool.query(
       `SELECT market_id FROM markets WHERE resolution_date = $1 AND node = 'TH_NP15_GEN-APND'`,
