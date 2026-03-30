@@ -23,7 +23,9 @@ async function fetchBayAreaThreshold(yyyymmdd: string): Promise<number> {
     `&startdatetime=${y}${m}${d}T00:00${tz}&enddatetime=${y}${m}${d}T23:59${tz}` +
     `&version=1&market_run_id=DAM&node=TH_NP15_GEN-APND&resultformat=6`;
 
-  const resp  = await fetch(url);
+  const resp  = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; OnPeak/1.0)" },
+  });
   if (!resp.ok) throw new Error(`CAISO HTTP ${resp.status}`);
   const buf   = Buffer.from(await resp.arrayBuffer());
   let zip: AdmZip;
