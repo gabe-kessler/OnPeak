@@ -19,14 +19,20 @@ async function fetchBayAreaThreshold(yyyymmdd: string): Promise<number> {
   const m  = yyyymmdd.slice(4, 6);
   const d  = yyyymmdd.slice(6, 8);
   const tz = `${offset < 0 ? "-" : "+"}${String(Math.abs(offset)).padStart(2, "0")}:00`;
-  const url = `http://oasis.caiso.com/oasisapi/SingleZip?queryname=PRC_LMP` +
+  const url = `https://oasis.caiso.com/oasisapi/SingleZip?queryname=PRC_LMP` +
     `&startdatetime=${y}${m}${d}T00:00${tz}&enddatetime=${y}${m}${d}T23:59${tz}` +
     `&version=1&market_run_id=DAM&node=TH_NP15_GEN-APND&resultformat=6`;
 
-  const resp  = await fetch(url, { redirect: "follow" });
+  const resp  = await fetch(url);
   if (!resp.ok) throw new Error(`CAISO HTTP ${resp.status}`);
   const buf   = Buffer.from(await resp.arrayBuffer());
-  const zip   = new AdmZip(buf);
+  let zip: AdmZip;
+  try {
+    zip = new AdmZip(buf);
+  } catch {
+    const preview = buf.slice(0, 200).toString("utf8");
+    throw new Error(`CAISO response is not a ZIP. Preview: ${preview}`);
+  }
   const entry = zip.getEntries().find((e) => e.entryName.endsWith(".csv"));
   if (!entry) throw new Error("No CSV in CAISO zip");
   const csv    = zip.readAsText(entry);

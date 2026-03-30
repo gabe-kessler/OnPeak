@@ -29,7 +29,7 @@ function ptOffset(): number {
 }
 
 async function unzipCAISO(url: string): Promise<string> {
-  const resp = await fetch(url, { redirect: "follow" });
+  const resp = await fetch(url);
   if (!resp.ok) throw new Error(`CAISO HTTP ${resp.status}`);
   const buf   = Buffer.from(await resp.arrayBuffer());
   const zip   = new AdmZip(buf);
@@ -106,7 +106,7 @@ async function fetchBayAreaPrices(yyyymmdd: string): Promise<HourPrices> {
   const d  = yyyymmdd.slice(6, 8);
   const tz = `${offset < 0 ? "-" : "+"}${String(Math.abs(offset)).padStart(2, "0")}:00`;
 
-  const priceUrl = `http://oasis.caiso.com/oasisapi/SingleZip?queryname=PRC_INTVL_LMP` +
+  const priceUrl = `https://oasis.caiso.com/oasisapi/SingleZip?queryname=PRC_INTVL_LMP` +
     `&startdatetime=${y}${m}${d}T00:00${tz}&enddatetime=${y}${m}${d}T23:55${tz}` +
     `&version=1&market_run_id=RTM&node=TH_NP15_GEN-APND&resultformat=6`;
 
