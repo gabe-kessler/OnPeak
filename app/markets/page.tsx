@@ -12,6 +12,7 @@ type Market = {
   settlement_value: number | null;
   best_yes_ask: number | null;
   best_no_ask: number | null;
+  model_prob: number | null;
 };
 
 type PricePoint = { minutes: number; price: number };
@@ -197,11 +198,15 @@ function MarketCard({ market, points, currentPrice, isToday }: {
         <div style={{ display: "flex", gap: "8px" }}>
           <div style={{ flex: 1, background: S.elevated, border: `1px solid ${S.border}`, borderRadius: "5px", padding: "6px 0", textAlign: "center" }}>
             <p style={{ fontSize: "10px", fontWeight: 700, color: S.green, marginBottom: "2px" }}>YES</p>
-            <p style={{ fontSize: "16px", fontWeight: 700, color: S.green }}>$0.50</p>
+            <p style={{ fontSize: "16px", fontWeight: 700, color: S.green }}>
+              {market.model_prob != null ? `${Math.round(market.model_prob * 100)}¢` : "50¢"}
+            </p>
           </div>
           <div style={{ flex: 1, background: S.elevated, border: `1px solid ${S.border}`, borderRadius: "5px", padding: "6px 0", textAlign: "center" }}>
             <p style={{ fontSize: "10px", fontWeight: 700, color: S.red, marginBottom: "2px" }}>NO</p>
-            <p style={{ fontSize: "16px", fontWeight: 700, color: S.red }}>$0.50</p>
+            <p style={{ fontSize: "16px", fontWeight: 700, color: S.red }}>
+              {market.model_prob != null ? `${Math.round((1 - market.model_prob) * 100)}¢` : "50¢"}
+            </p>
           </div>
         </div>
       </div>
