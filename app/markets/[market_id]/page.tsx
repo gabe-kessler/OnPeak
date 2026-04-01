@@ -11,6 +11,7 @@ type Market = {
   resolution_date: string;
   status: string;
   settlement_value: number | null;
+  model_prob: number | null;
   best_yes_ask: number | null;
   best_no_ask: number | null;
   orderbook: { side: string; contract_type: string; display_price: string; quantity: number }[];
@@ -32,7 +33,7 @@ function priceColor(price: number): string {
 const NODE_LABEL: Record<string, string> = {
   "N.Y.C.":           "NYC avg RT LBMP",
   ".Z.NEMASSBOST":    "Boston avg RT LMP",
-  "TH_NP15_GEN-APND": "Bay Area avg RT LMP",
+  "TH_NP15_GEN-APND": "NorCal Hub avg RT LMP",
 };
 
 const NODE_ID: Record<string, string> = {
@@ -346,6 +347,43 @@ export default function MarketPage() {
         )}
       </div>
 
+      {/* Model probability — NYC markets only */}
+      {market.model_prob != null && !isSettled && (() => {
+        const prob    = market.model_prob;
+        const yesCents = Math.round(prob * 100);
+        const noCents  = 100 - yesCents;
+        const barColor = prob >= 0.5 ? S.green : S.red;
+        return (
+          <div className="rounded p-4 mb-5" style={{ background: S.surface, border: `1px solid ${S.border}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "10px" }}>
+              <p className="text-xs font-medium uppercase tracking-wide" style={{ color: S.faint }}>
+                Model Probability
+              </p>
+              <p style={{ fontSize: "11px", color: S.faint }}>updated every 5 min</p>
+            </div>
+            <div style={{ display: "flex", gap: "16px", alignItems: "center", marginBottom: "10px" }}>
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: "11px", color: S.green, fontWeight: 600, marginBottom: "2px" }}>YES</p>
+                <p style={{ fontSize: "22px", fontWeight: 700, color: S.green }}>{yesCents}¢</p>
+              </div>
+              <div style={{ flex: 1 }}>
+                {/* Progress bar */}
+                <div style={{ height: "10px", borderRadius: "5px", background: S.elevated, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${yesCents}%`, background: barColor, borderRadius: "5px", transition: "width 0.4s ease" }} />
+                </div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: "11px", color: S.red, fontWeight: 600, marginBottom: "2px" }}>NO</p>
+                <p style={{ fontSize: "22px", fontWeight: 700, color: S.red }}>{noCents}¢</p>
+              </div>
+            </div>
+            <p style={{ fontSize: "11px", color: S.faint }}>
+              Model estimates {yesCents}% chance NYC avg RT exceeds DAM on this day.
+            </p>
+          </div>
+        );
+      })()}
+
       {/* Price chart */}
       <div className="rounded p-5 mb-5" style={cardStyle}>
         {isToday && (
@@ -389,7 +427,7 @@ export default function MarketPage() {
               onMouseLeave={() => setHoverYes(false)}
               style={{ flex: 1, padding: "14px 0", background: S.green, color: "#fff", border: `2px solid ${hoverYes || side === "yes" ? "#0d4720" : S.green}`, borderRadius: "6px", fontWeight: 700, fontSize: "15px", cursor: "pointer", opacity: side && side !== "yes" ? 0.55 : 1, transition: "border-color 0.1s, opacity 0.1s" }}
             >
-              BUY YES · 50¢
+              BUY YES · {market.model_prob != null ? `${Math.round(market.model_prob * 100)}¢` : "50¢"}
             </button>
             <button
               onClick={() => { setSide(side === "no" ? null : "no"); setError(null); setSuccess(null); }}
@@ -397,7 +435,7 @@ export default function MarketPage() {
               onMouseLeave={() => setHoverNo(false)}
               style={{ flex: 1, padding: "14px 0", background: S.red, color: "#fff", border: `2px solid ${hoverNo || side === "no" ? "#7a0a0f" : S.red}`, borderRadius: "6px", fontWeight: 700, fontSize: "15px", cursor: "pointer", opacity: side && side !== "no" ? 0.55 : 1, transition: "border-color 0.1s, opacity 0.1s" }}
             >
-              BUY NO · 50¢
+              BUY NO · {market.model_prob != null ? `${100 - Math.round(market.model_prob * 100)}¢` : "50¢"}
             </button>
           </div>
 

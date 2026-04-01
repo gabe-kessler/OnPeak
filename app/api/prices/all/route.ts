@@ -3,6 +3,7 @@ import AdmZip from "adm-zip";
 import fs from "fs";
 import path from "path";
 import { saveSnapshots } from "@/lib/snapshots";
+import { updateNYCOdds } from "@/lib/update-nyc-odds";
 
 // GET /api/prices/all
 // Fetches real-time 5-min LMPs from GridStatus API for all major US ISOs.
@@ -43,7 +44,7 @@ function dateInOffset(offsetHrs: number): string {
 
 // CAISO: fetch directly from OASIS
 const CAISO_HUBS: Record<string, { name: string; lat: number; lon: number }> = {
-  "TH_NP15_GEN-APND": { name: "Bay Area (NP15)", lat: 37.77, lon: -122.42 },
+  "TH_NP15_GEN-APND": { name: "NorCal Hub (NP15)", lat: 37.77, lon: -122.42 },
 };
 
 function ptOffset(): number {
@@ -370,6 +371,7 @@ export async function GET() {
       _inflight = fetchAllISOs().then((entry) => {
         writeCache(entry);
         saveSnapshots(entry.zones); // persist to DB (fire-and-forget)
+        updateNYCOdds().catch((err) => console.error("updateNYCOdds error:", err)); // fire-and-forget
         _inflight = null;
         return entry;
       }).catch((err) => {

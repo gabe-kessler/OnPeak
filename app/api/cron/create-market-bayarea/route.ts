@@ -111,8 +111,8 @@ async function handler(req: Request) {
          (market_id, name, description, node, resolution_date, threshold, direction, status, created_at)
        VALUES (gen_random_uuid(), $1, $2, 'TH_NP15_GEN-APND', $3, $4, 'higher', 'open', NOW())`,
       [
-        `Bay Area Average RT — ${humanDate}`,
-        `Will the Bay Area Average RT 24-hr average RT price exceed $${threshold.toFixed(2)}/MWh?`,
+        `NorCal Hub Average RT — ${humanDate}`,
+        `Will the NorCal Hub Average RT 24-hr average RT price exceed $${threshold.toFixed(2)}/MWh?`,
         displayDate,
         threshold,
       ]

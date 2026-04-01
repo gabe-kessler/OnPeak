@@ -125,7 +125,7 @@ function slotFullLabel(slot: number, etDateStr: string): string {
 const ZONE_META: Record<string, { name: string; lat: number; lon: number }> = {
   "NYISO_N.Y.C.":            { name: "New York City (Zone J)", lat: 40.71,  lon: -74.01  },
   "ISONE_.Z.NEMASSBOST":     { name: "Boston (NEMASSBOST)",    lat: 42.36,  lon: -71.06  },
-  "CAISO_TH_NP15_GEN-APND": { name: "Bay Area (NP15)",        lat: 37.77,  lon: -122.42 },
+  "CAISO_TH_NP15_GEN-APND": { name: "NorCal Hub (NP15)",       lat: 37.77,  lon: -122.42 },
 };
 
 // ── component ─────────────────────────────────────────────────────────────────

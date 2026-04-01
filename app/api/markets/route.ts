@@ -8,7 +8,7 @@ import pool from "@/lib/db";
 export async function GET() {
   try {
     const marketsResult = await pool.query(
-      `SELECT market_id, name, description, node, resolution_date, threshold, direction, status, settlement_value
+      `SELECT market_id, name, description, node, resolution_date, threshold, direction, status, settlement_value, model_prob
        FROM markets
        WHERE status = 'open'
           OR (status = 'settled' AND resolution_date = CURRENT_DATE - INTERVAL '1 day')
@@ -69,6 +69,7 @@ export async function GET() {
             : String(market.resolution_date).slice(0, 10),
           threshold:        Number(market.threshold),
           settlement_value: market.settlement_value != null ? Number(market.settlement_value) : null,
+          model_prob:       market.model_prob != null ? Number(market.model_prob) : null,
           best_yes_ask:     bestYesAsk ? Number(bestYesAsk) : null,
           best_no_ask:      bestBid    ? Number((1 - Number(bestBid)).toFixed(2)) : null,
           orderbook,

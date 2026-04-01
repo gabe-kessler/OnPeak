@@ -115,7 +115,7 @@ async function backfillCAISO(etDateStr: string): Promise<Row[]> {
     const ptMin  = String((intNum - 1) * 5).padStart(2, "0");
     out.push({
       id: "CAISO_TH_NP15_GEN-APND",
-      name: "Bay Area (NP15)",
+      name: "NorCal Hub (NP15)",
       price,
       timestamp: `${oprDt}T${ptHour}:${ptMin}:00${tzSuffix}`,
     });
