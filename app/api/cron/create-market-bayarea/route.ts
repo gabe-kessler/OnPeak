@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import pool from "@/lib/db";
 import AdmZip from "adm-zip";
+import {
+  computeDamFeatures,
+  computeRunningInputs,
+  buildFeatureVector,
+  scoreNP15Model,
+} from "@/lib/np15-model";
 
 // GET /api/cron/create-market-bayarea
 // Called at ~4:30 PM ET each day.
@@ -13,7 +19,8 @@ function ptOffset(): number {
   return m >= 3 && m <= 11 ? -7 : -8;
 }
 
-async function fetchBayAreaThreshold(yyyymmdd: string): Promise<number> {
+// Returns { threshold (avg), hourlyPrices (OPR_HR 1–24 in order) }
+async function fetchBayAreaDAM(yyyymmdd: string): Promise<{ threshold: number; hourlyPrices: number[] }> {
   const offset = ptOffset();
   const y  = yyyymmdd.slice(0, 4);
   const m  = yyyymmdd.slice(4, 6);
@@ -38,9 +45,6 @@ async function fetchBayAreaThreshold(yyyymmdd: string): Promise<number> {
   const entry = zip.getEntries().find((e) => e.entryName.endsWith(".csv"));
   if (!entry) throw new Error("No CSV in CAISO zip");
   const csv    = zip.readAsText(entry);
-  // When CAISO has no data for the requested date it still returns a ZIP,
-  // but the files inside contain XML error documents despite having .csv
-  // extensions.  Detect this and surface a clear error.
   if (csv.trimStart().startsWith("<?xml")) {
     throw new Error(`CAISO returned no data for ${yyyymmdd} (XML error response). Preview: ${csv.slice(0, 300)}`);
   }
@@ -48,17 +52,43 @@ async function fetchBayAreaThreshold(yyyymmdd: string): Promise<number> {
   const header = lines[0].split(",").map((h) => h.trim());
   const ltIdx  = header.indexOf("LMP_TYPE");
   const mwIdx  = header.indexOf("MW");
-  if (ltIdx === -1 || mwIdx === -1) throw new Error("Unexpected CAISO DAM CSV format");
+  const hrIdx  = header.indexOf("OPR_HR");
+  if (ltIdx === -1 || mwIdx === -1 || hrIdx === -1) throw new Error("Unexpected CAISO DAM CSV format");
 
-  const prices: number[] = [];
+  const heMap = new Map<number, number>();
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(",");
     if (cols[ltIdx]?.trim() !== "LMP") continue;
-    const p = parseFloat(cols[mwIdx]?.trim());
-    if (!isNaN(p)) prices.push(p);
+    const hr = parseInt(cols[hrIdx]?.trim() ?? "");
+    const p  = parseFloat(cols[mwIdx]?.trim());
+    if (!isNaN(hr) && !isNaN(p)) heMap.set(hr, p);
   }
-  if (prices.length === 0) throw new Error("No Bay Area rows in CAISO DAM CSV");
-  return prices.reduce((a, b) => a + b, 0) / prices.length;
+  if (heMap.size === 0) throw new Error("No Bay Area rows in CAISO DAM CSV");
+
+  const hourlyPrices: number[] = [];
+  for (let hr = 1; hr <= 24; hr++) {
+    hourlyPrices.push(heMap.get(hr) ?? 0);
+  }
+  const threshold = hourlyPrices.reduce((a, b) => a + b, 0) / hourlyPrices.length;
+  return { threshold, hourlyPrices };
+}
+
+// Fetch yesterday's NP15 5-min RT prices after 1 PM PT from price_snapshots
+async function fetchNP15PriorRtAfternoon(yesterdayPT: string): Promise<number[]> {
+  try {
+    const result = await pool.query(
+      `SELECT CAST(price AS float) AS price
+       FROM price_snapshots
+       WHERE node_id = 'CAISO_TH_NP15_GEN-APND'
+         AND DATE(recorded_at AT TIME ZONE 'America/Los_Angeles') = $1
+         AND (recorded_at AT TIME ZONE 'America/Los_Angeles')::time >= '13:00:00'
+       ORDER BY recorded_at ASC`,
+      [yesterdayPT]
+    );
+    return result.rows.map((r: { price: number }) => r.price);
+  } catch {
+    return [];
+  }
 }
 
 export async function POST(req: Request) { return handler(req); }
@@ -75,6 +105,7 @@ async function handler(req: Request) {
     let displayDate: string;
     let yyyymmdd: string;
     let humanDate: string;
+    let yesterdayPT: string;
 
     if (dateOverride && /^\d{4}-\d{2}-\d{2}$/.test(dateOverride)) {
       displayDate = dateOverride;
@@ -82,6 +113,9 @@ async function handler(req: Request) {
       humanDate   = new Intl.DateTimeFormat("en-US", {
         month: "long", day: "numeric", year: "numeric",
       }).format(new Date(dateOverride + "T12:00:00Z"));
+      const prior = new Date(dateOverride + "T12:00:00Z");
+      prior.setUTCDate(prior.getUTCDate() - 1);
+      yesterdayPT = prior.toISOString().slice(0, 10);
     } else {
       // Compute "tomorrow in PT" — toISOString() uses UTC, so after 8 PM ET
       // (midnight UTC) the UTC date has already rolled over and +1 would
@@ -94,31 +128,52 @@ async function handler(req: Request) {
       humanDate   = new Intl.DateTimeFormat("en-US", {
         month: "long", day: "numeric", year: "numeric",
       }).format(new Date(displayDate + "T12:00:00Z"));
+      yesterdayPT = ptNow.toISOString().slice(0, 10);
     }
 
     const existing = await pool.query(
-      `SELECT market_id FROM markets WHERE resolution_date = $1 AND node = 'TH_NP15_GEN-APND'`,
+      `SELECT market_id, model_prob FROM markets WHERE resolution_date = $1 AND node = 'TH_NP15_GEN-APND'`,
       [displayDate]
     );
     if (existing.rows.length > 0) {
+      // Backfill model_prob if missing
+      if (existing.rows[0].model_prob == null) {
+        const { threshold, hourlyPrices } = await fetchBayAreaDAM(yyyymmdd);
+        const priorRt = await fetchNP15PriorRtAfternoon(yesterdayPT);
+        const damFeatures = computeDamFeatures(hourlyPrices, priorRt);
+        const inputs = computeRunningInputs([], damFeatures, displayDate);
+        const modelProb = parseFloat(Math.max(0.02, Math.min(0.98, scoreNP15Model(buildFeatureVector(inputs)))).toFixed(4));
+        await pool.query(
+          `UPDATE markets SET model_prob = $1, dam_features = $2 WHERE resolution_date = $3 AND node = 'TH_NP15_GEN-APND'`,
+          [modelProb, JSON.stringify(damFeatures), displayDate]
+        );
+        return NextResponse.json({ message: "Bay Area market backfilled with model_prob.", date: displayDate, model_prob: modelProb });
+      }
       return NextResponse.json({ message: "Bay Area market already exists.", date: displayDate });
     }
 
-    const threshold = parseFloat((await fetchBayAreaThreshold(yyyymmdd)).toFixed(2));
+    const { threshold: rawThreshold, hourlyPrices } = await fetchBayAreaDAM(yyyymmdd);
+    const threshold = parseFloat(rawThreshold.toFixed(2));
+    const priorRt = await fetchNP15PriorRtAfternoon(yesterdayPT);
+    const damFeatures = computeDamFeatures(hourlyPrices, priorRt);
+    const inputs = computeRunningInputs([], damFeatures, displayDate);
+    const modelProb = parseFloat(Math.max(0.02, Math.min(0.98, scoreNP15Model(buildFeatureVector(inputs)))).toFixed(4));
 
     await pool.query(
       `INSERT INTO markets
-         (market_id, name, description, node, resolution_date, threshold, direction, status, created_at)
-       VALUES (gen_random_uuid(), $1, $2, 'TH_NP15_GEN-APND', $3, $4, 'higher', 'open', NOW())`,
+         (market_id, name, description, node, resolution_date, threshold, direction, status, created_at, dam_features, model_prob)
+       VALUES (gen_random_uuid(), $1, $2, 'TH_NP15_GEN-APND', $3, $4, 'higher', 'open', NOW(), $5, $6)`,
       [
         `NorCal Hub Average RT — ${humanDate}`,
         `Will the NorCal Hub Average RT 24-hr average RT price exceed $${threshold.toFixed(2)}/MWh?`,
         displayDate,
         threshold,
+        JSON.stringify(damFeatures),
+        modelProb,
       ]
     );
 
-    return NextResponse.json({ success: true, date: displayDate, threshold });
+    return NextResponse.json({ success: true, date: displayDate, threshold, model_prob: modelProb });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("create-market-bayarea error:", msg);

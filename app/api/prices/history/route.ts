@@ -123,47 +123,51 @@ async function backfillCAISO(etDateStr: string): Promise<Row[]> {
   return out;
 }
 
-// ── ISO-NE: 5-min prelim LMPs for the day via webservices API ─────────────────
+// ── ISO-NE: 5-min LMPs for the day via public static CSVs ────────────────────
+// ISO-NE publishes 5min-rt-final CSVs in 4-hour blocks that are available
+// in near-real-time (the auth day endpoint /prelim/day/{date} returns 404).
+// Format: "D",LocationID,LocalTime,Energy,Congestion,Loss,LMP (ET)
+// Location ID 4008 = .Z.NEMASSBOST
+
+const ISONE_RT_BASE   = "https://www.iso-ne.com/static-transform/csv/histRpts/5min-rt-prelim";
+const ISONE_RT_BLOCKS = ["00-04", "04-08", "08-12", "12-16", "16-20", "20-24"];
+const ISONE_LOC_ID    = 4008;
+const ET_OFFSET       = () => (new Date().getUTCMonth() + 1 >= 3 && new Date().getUTCMonth() + 1 <= 11) ? "-04:00" : "-05:00";
 
 async function backfillISONE(yyyymmdd: string): Promise<Row[]> {
-  const user = process.env.ISONE_USERNAME;
-  const pass = process.env.ISONE_PASSWORD;
-  if (!user || !pass) {
-    console.error("[history/ISONE] credentials missing — ISONE_USERNAME/ISONE_PASSWORD not set");
-    return [];
-  }
+  const out: Row[]   = [];
+  const tzSuffix     = ET_OFFSET();
 
-  const auth = Buffer.from(`${user}:${pass}`).toString("base64");
-  let resp: Response;
-  try {
-    resp = await fetch(
-      `https://webservices.iso-ne.com/api/v1.1/fiveminutelmp/prelim/day/${yyyymmdd}`,
-      { headers: { Accept: "application/json", Authorization: `Basic ${auth}` }, cache: "no-store" }
-    );
-  } catch (err) {
-    console.error("[history/ISONE] network error:", err);
-    return [];
-  }
-  if (!resp.ok) {
-    console.error(`[history/ISONE] HTTP ${resp.status} ${resp.statusText} for date ${yyyymmdd}`);
-    return [];
-  }
+  await Promise.all(ISONE_RT_BLOCKS.map(async (block) => {
+    const url  = `${ISONE_RT_BASE}/lmp_5min_${yyyymmdd}_${block}.csv`;
+    let resp: Response;
+    try {
+      resp = await fetch(url, { cache: "no-store" });
+    } catch { return; }
+    if (!resp.ok) return; // block not yet published — skip
 
-  const data = await resp.json();
-  const lmps: { BeginDate: string; Location: { $: string }; LmpTotal: number }[] =
-    data?.FiveMinLmps?.FiveMinLmp ?? [];
+    const text  = await resp.text();
+    const nowMs = Date.now();
+    for (const line of text.split("\n")) {
+      if (!line.startsWith('"D"')) continue;
+      const parts = line.split(",").map((p: string) => p.trim().replace(/"/g, ""));
+      if (parseInt(parts[1]) !== ISONE_LOC_ID) continue;
+      const [h, m, s] = (parts[2] ?? "").split(":").map(Number);
+      if (isNaN(h)) continue;
+      const price = parseFloat(parts[6]);
+      if (isNaN(price)) continue;
+      // Build ISO timestamp in ET
+      const dateStr = `${yyyymmdd.slice(0,4)}-${yyyymmdd.slice(4,6)}-${yyyymmdd.slice(6,8)}`;
+      const ts = `${dateStr}T${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s ?? 0).padStart(2,"0")}${tzSuffix}`;
+      // Skip future intervals
+      if (new Date(ts).getTime() > nowMs) continue;
+      out.push({ id: "ISONE_.Z.NEMASSBOST", name: "Boston (NEMASSBOST)", price, timestamp: ts });
+    }
+  }));
 
-  const results = lmps
-    .filter(r => r.Location.$ === ".Z.NEMASSBOST")
-    .map(r => ({
-      id:        "ISONE_.Z.NEMASSBOST",
-      name:      "Boston (NEMASSBOST)",
-      price:     r.LmpTotal,
-      timestamp: r.BeginDate,
-    }));
-
-  console.log(`[history/ISONE] fetched ${results.length} rows for ${yyyymmdd}`);
-  return results;
+  out.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  console.log(`[history/ISONE] fetched ${out.length} rows for ${yyyymmdd} from static CSVs`);
+  return out;
 }
 
 // ── handler ───────────────────────────────────────────────────────────────────

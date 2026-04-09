@@ -3,63 +3,42 @@ import {
   computeDamFeatures,
   computeRunningInputs,
   buildFeatureVector,
-  scoreNYCModel,
+  scoreNP15Model,
   type DamFeatures,
-} from "./nyc-model";
+} from "./np15-model";
 
-let historyTableReady = false;
-async function ensureHistoryTable() {
-  if (historyTableReady) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS market_prob_history (
-      market_id   UUID          NOT NULL,
-      prob        NUMERIC(6,4)  NOT NULL,
-      recorded_at TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (market_id, recorded_at)
-    )
-  `);
-  historyTableReady = true;
-}
-
-// Reusable core logic for updating model_prob on open NYC markets.
-// Runs two passes every 5 minutes (piggybacked on /api/prices/all):
-//
-// 1. TODAY's market — updates with accumulating RT intervals so far.
-// 2. TOMORROW's market — re-scores using today's growing post-1 PM RT prices
-//    as the prior_rt features. These keep updating until midnight when the
-//    operating day flips and pass #1 takes over.
-export async function updateNYCOdds(): Promise<{ updated: number; markets: object[] }> {
-  await ensureHistoryTable();
-
-  const todayET = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
+// Reusable core logic for updating model_prob on open NP15 markets.
+// Uses Pacific Time for date/time comparisons (NP15 operating day is in PT).
+export async function updateNP15Odds(): Promise<{ updated: number; markets: object[] }> {
+  const todayPT = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
   }).format(new Date());
 
-  const tomorrowET = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
+  const tomorrowPT = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
   }).format(new Date(Date.now() + 86_400_000));
 
   const rows = await pool.query(
     `SELECT market_id, resolution_date, dam_features
      FROM markets
-     WHERE node = 'N.Y.C.'
+     WHERE node = 'TH_NP15_GEN-APND'
        AND status = 'open'
        AND resolution_date IN ($1, $2)
        AND dam_features IS NOT NULL`,
-    [todayET, tomorrowET]
+    [todayPT, tomorrowPT]
   );
 
   if (rows.rows.length === 0) return { updated: 0, markets: [] };
 
-  // Fetch today's post-1 PM RT prices once — used as prior_rt for tomorrow's market
+  // Today's post-1 PM PT prices — used as prior_rt for tomorrow's market
   const priorRtRows = await pool.query(
     `SELECT CAST(price AS float) AS price
      FROM price_snapshots
-     WHERE node_id = 'NYISO_N.Y.C.'
-       AND DATE(recorded_at AT TIME ZONE 'America/New_York') = $1
-       AND (recorded_at AT TIME ZONE 'America/New_York')::time >= '13:00:00'
+     WHERE node_id = 'CAISO_TH_NP15_GEN-APND'
+       AND DATE(recorded_at AT TIME ZONE 'America/Los_Angeles') = $1
+       AND (recorded_at AT TIME ZONE 'America/Los_Angeles')::time >= '13:00:00'
      ORDER BY recorded_at ASC`,
-    [todayET]
+    [todayPT]
   );
   const priorRtPrices: number[] = priorRtRows.rows.map((r: { price: number }) => r.price);
 
@@ -72,36 +51,34 @@ export async function updateNYCOdds(): Promise<{ updated: number; markets: objec
           ? row.resolution_date.toISOString().slice(0, 10)
           : String(row.resolution_date);
 
-      const isToday = operatingDate === todayET;
+      const isToday = operatingDate === todayPT;
 
       let modelProb: number;
       let inputs;
 
       if (isToday) {
-        // Pass 1: update with today's accumulating RT intervals
         const snapshotRows = await pool.query(
           `SELECT CAST(price AS float) AS price
            FROM price_snapshots
-           WHERE node_id = 'NYISO_N.Y.C.'
-             AND DATE(recorded_at AT TIME ZONE 'America/New_York') = $1
+           WHERE node_id = 'CAISO_TH_NP15_GEN-APND'
+             AND DATE(recorded_at AT TIME ZONE 'America/Los_Angeles') = $1
            ORDER BY recorded_at ASC`,
           [operatingDate]
         );
         const rtPrices: number[] = snapshotRows.rows.map((r: { price: number }) => r.price);
         const dam = row.dam_features as DamFeatures;
         inputs = computeRunningInputs(rtPrices, dam, operatingDate);
-        modelProb = parseFloat(Math.max(0.02, Math.min(0.98, scoreNYCModel(buildFeatureVector(inputs)))).toFixed(4));
+        modelProb = parseFloat(Math.max(0.02, Math.min(0.98, scoreNP15Model(buildFeatureVector(inputs)))).toFixed(4));
 
         await pool.query(
           `UPDATE markets SET model_prob = $1 WHERE market_id = $2`,
           [modelProb, row.market_id]
         );
       } else {
-        // Pass 2: re-score tomorrow's market with updated prior-RT features
         const existingDam = row.dam_features as DamFeatures;
         const updatedDam = computeDamFeatures(existingDam.hourly_dam_prices, priorRtPrices);
         inputs = computeRunningInputs([], updatedDam, operatingDate);
-        modelProb = parseFloat(Math.max(0.02, Math.min(0.98, scoreNYCModel(buildFeatureVector(inputs)))).toFixed(4));
+        modelProb = parseFloat(Math.max(0.02, Math.min(0.98, scoreNP15Model(buildFeatureVector(inputs)))).toFixed(4));
 
         await pool.query(
           `UPDATE markets SET model_prob = $1, dam_features = $2 WHERE market_id = $3`,
@@ -109,7 +86,6 @@ export async function updateNYCOdds(): Promise<{ updated: number; markets: objec
         );
       }
 
-      // Record history snapshot
       await pool.query(
         `INSERT INTO market_prob_history (market_id, prob, recorded_at)
          VALUES ($1, $2, NOW())

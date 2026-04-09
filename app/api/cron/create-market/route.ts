@@ -7,6 +7,12 @@ import {
   scoreNYCModel,
   type DamFeatures,
 } from "@/lib/nyc-model";
+import {
+  computeDamFeatures as computeBOSDamFeatures,
+  computeRunningInputs as computeBOSRunningInputs,
+  buildFeatureVector as buildBOSFeatureVector,
+  scoreBOSModel,
+} from "@/lib/bos-model";
 
 // POST /api/cron/create-market
 // Called at ~11:30 AM ET each day.
@@ -80,19 +86,47 @@ async function fetchPriorRtAfternoon(yesterdayDate: string): Promise<number[]> {
 }
 
 // ISO-NE publishes DA LMP as a public CSV — no auth required
-// URL discovered from gridstatus open-source library
-async function fetchBostonThreshold(yyyymmdd: string): Promise<number> {
+// Returns { threshold (avg), hourlyPrices (HE1–HE24 in order) }
+async function fetchBostonDAM(yyyymmdd: string): Promise<{ threshold: number; hourlyPrices: number[] }> {
   const url  = `https://www.iso-ne.com/static-transform/csv/histRpts/da-lmp/WW_DALMP_ISO_${yyyymmdd}.csv`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`ISO-NE DAM HTTP ${resp.status}`);
-  const lines  = (await resp.text()).split("\n");
+  const lines = (await resp.text()).split("\n");
   // Columns: "D", Date, HE, LocationID, LocationName, LocationType, LMP, Energy, Congestion, Loss
-  const prices = lines
-    .filter((l) => l.includes(".Z.NEMASSBOST"))
-    .map((l) => parseFloat(l.replace(/"/g, "").split(",")[6]))
-    .filter((p) => !isNaN(p));
-  if (prices.length === 0) throw new Error("No NEMASSBOST rows in ISO-NE DAM CSV");
-  return prices.reduce((a, b) => a + b, 0) / prices.length;
+  const strip = (s: string) => s.trim().replace(/"/g, "");
+  const heMap = new Map<number, number>();
+  for (const line of lines) {
+    if (!line.includes(".Z.NEMASSBOST")) continue;
+    const cols = line.split(",");
+    const he  = parseInt(strip(cols[2] ?? ""));
+    const lmp = parseFloat(strip(cols[6] ?? ""));
+    if (!isNaN(he) && !isNaN(lmp)) heMap.set(he, lmp);
+  }
+  if (heMap.size === 0) throw new Error("No NEMASSBOST rows in ISO-NE DAM CSV");
+  const hourlyPrices: number[] = [];
+  for (let he = 1; he <= 24; he++) {
+    hourlyPrices.push(heMap.get(he) ?? 0);
+  }
+  const threshold = hourlyPrices.reduce((a, b) => a + b, 0) / hourlyPrices.length;
+  return { threshold, hourlyPrices };
+}
+
+// Fetch yesterday's BOS 5-min RT prices after 1 PM ET from price_snapshots
+async function fetchBOSPriorRtAfternoon(yesterdayDate: string): Promise<number[]> {
+  try {
+    const result = await pool.query(
+      `SELECT CAST(price AS float) AS price
+       FROM price_snapshots
+       WHERE node_id = 'ISONE_.Z.NEMASSBOST'
+         AND DATE(recorded_at AT TIME ZONE 'America/New_York') = $1
+         AND (recorded_at AT TIME ZONE 'America/New_York')::time >= '13:00:00'
+       ORDER BY recorded_at ASC`,
+      [yesterdayDate]
+    );
+    return result.rows.map((r: { price: number }) => r.price);
+  } catch {
+    return [];
+  }
 }
 
 // ── market insert helper ──────────────────────────────────────────────────────
@@ -187,7 +221,6 @@ async function handler(req: Request) {
         const { threshold, hourlyPrices } = await fetchNYCDAM(yyyymmdd);
         const priorRt = await fetchPriorRtAfternoon(yesterdayDate);
         const damFeatures = computeDamFeatures(hourlyPrices, priorRt);
-        // At market creation, no RT has elapsed yet
         const inputs = computeRunningInputs([], damFeatures, displayDate);
         const modelProb = scoreNYCModel(buildFeatureVector(inputs));
         return upsertMarket(
@@ -198,9 +231,21 @@ async function handler(req: Request) {
           parseFloat(modelProb.toFixed(4)),
         );
       })(),
-      fetchBostonThreshold(yyyymmdd).then((t) =>
-        upsertMarket(".Z.NEMASSBOST", "Boston Average RT", parseFloat(t.toFixed(2)), displayDate, humanDate)
-      ),
+      // BOS: fetch full DAM + prior RT → compute model features + initial odds
+      (async () => {
+        const { threshold, hourlyPrices } = await fetchBostonDAM(yyyymmdd);
+        const priorRt = await fetchBOSPriorRtAfternoon(yesterdayDate);
+        const damFeatures = computeBOSDamFeatures(hourlyPrices, priorRt);
+        const inputs = computeBOSRunningInputs([], damFeatures, displayDate);
+        const modelProb = scoreBOSModel(buildBOSFeatureVector(inputs));
+        return upsertMarket(
+          ".Z.NEMASSBOST", "Boston Average RT",
+          parseFloat(threshold.toFixed(2)),
+          displayDate, humanDate,
+          damFeatures,
+          parseFloat(modelProb.toFixed(4)),
+        );
+      })(),
     ]);
 
     return NextResponse.json({

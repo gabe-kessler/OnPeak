@@ -4,6 +4,8 @@ import fs from "fs";
 import path from "path";
 import { saveSnapshots } from "@/lib/snapshots";
 import { updateNYCOdds } from "@/lib/update-nyc-odds";
+import { updateBOSOdds } from "@/lib/update-bos-odds";
+import { updateNP15Odds } from "@/lib/update-np15-odds";
 
 // GET /api/prices/all
 // Fetches real-time 5-min LMPs from GridStatus API for all major US ISOs.
@@ -371,7 +373,9 @@ export async function GET() {
       _inflight = fetchAllISOs().then((entry) => {
         writeCache(entry);
         saveSnapshots(entry.zones); // persist to DB (fire-and-forget)
-        updateNYCOdds().catch((err) => console.error("updateNYCOdds error:", err)); // fire-and-forget
+        updateNYCOdds().catch((err) => console.error("updateNYCOdds error:", err));   // fire-and-forget
+        updateBOSOdds().catch((err) => console.error("updateBOSOdds error:", err));   // fire-and-forget
+        updateNP15Odds().catch((err) => console.error("updateNP15Odds error:", err)); // fire-and-forget
         _inflight = null;
         return entry;
       }).catch((err) => {

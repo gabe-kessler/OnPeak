@@ -126,7 +126,7 @@ export default function Portfolio() {
       <div className="rounded p-5 mb-5" style={cardStyle}>
         <p className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: S.faint }}>Cash Balance</p>
         <p className="text-3xl font-bold" style={{ color: S.blue }}>
-          ${Number(displayBalance).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+          ${Number(displayBalance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </p>
       </div>
 

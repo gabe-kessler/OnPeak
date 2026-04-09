@@ -86,11 +86,15 @@ function PriceChart({ points, threshold }: { points: PricePoint[]; threshold: nu
   const svgRef = useRef<SVGSVGElement>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const hasData = points.length >= 2;
+  // Only draw the RT line/fills when data spans at least 60 minutes — prevents
+  // a spike glitch from a handful of closely-spaced points on a 24-hour axis.
+  const timeSpan = hasData ? points[points.length - 1].minutes - points[0].minutes : 0;
+  const hasLine  = hasData && timeSpan >= 60;
 
-  const prices = hasData ? points.map(p => p.price) : [];
+  const prices = hasLine ? points.map(p => p.price) : [];
   const allVals = [...prices, threshold];
-  const rawMin = hasData ? Math.min(...allVals) : threshold * 0.8;
-  const rawMax = hasData ? Math.max(...allVals) : threshold * 1.2;
+  const rawMin = hasLine ? Math.min(...allVals) : threshold * 0.8;
+  const rawMax = hasLine ? Math.max(...allVals) : threshold * 1.2;
   const pad = (rawMax - rawMin) * 0.12 || threshold * 0.1;
   const minP = rawMin - pad;
   const maxP = rawMax + pad;
@@ -105,7 +109,7 @@ function PriceChart({ points, threshold }: { points: PricePoint[]; threshold: nu
   const greenSegs: string[] = [];
   const redSegs:   string[] = [];
 
-  if (hasData) {
+  if (hasLine) {
     const svgPts = points.map(p => ({ x: toX(p.minutes), y: toY(p.price) }));
     for (let i = 0; i < svgPts.length - 1; i++) {
       const p1 = svgPts[i], p2 = svgPts[i + 1];
@@ -127,10 +131,10 @@ function PriceChart({ points, threshold }: { points: PricePoint[]; threshold: nu
     }
   }
 
-  const polyline = hasData ? points.map(p => `${toX(p.minutes)},${toY(p.price)}`).join(" ") : "";
+  const polyline = hasLine ? points.map(p => `${toX(p.minutes)},${toY(p.price)}`).join(" ") : "";
 
   function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
-    if (!hasData || !svgRef.current) return;
+    if (!hasLine || !svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
     const rawX = e.clientX - rect.left - PAD.left;
     const clampedX = Math.max(0, Math.min(CW, rawX));
@@ -147,7 +151,7 @@ function PriceChart({ points, threshold }: { points: PricePoint[]; threshold: nu
   const BOX_W = 90, BOX_H = 36;
 
   return (
-    <svg ref={svgRef} width={W} height={H} style={{ display: "block", overflow: "visible", cursor: hasData ? "crosshair" : "default" }}
+    <svg ref={svgRef} width={W} height={H} style={{ display: "block", overflow: "visible", cursor: hasLine ? "crosshair" : "default" }}
       onMouseMove={handleMouseMove}
       onMouseLeave={() => setTooltip(null)}
     >
@@ -165,7 +169,7 @@ function PriceChart({ points, threshold }: { points: PricePoint[]; threshold: nu
         {redSegs.length > 0   && <path d={redSegs.join(" ")}   fill={S.redFill} />}
         <line x1={0} y1={damY} x2={CW} y2={damY} stroke={S.blue} strokeWidth={1.5} strokeDasharray="5 3" />
         <text x={CW + 5} y={damY + 4} fontSize={9} fill={S.blue}>{`DAM $${threshold.toFixed(2)}`}</text>
-        {hasData && <polyline points={polyline} fill="none" stroke={S.text} strokeWidth={1.5} strokeLinejoin="round" />}
+        {hasLine && <polyline points={polyline} fill="none" stroke={S.text} strokeWidth={1.5} strokeLinejoin="round" />}
         <line x1={0} y1={CH} x2={CW} y2={CH} stroke={S.border} strokeWidth={0.5} />
         {X_HOURS.map(h => (
           <text key={h} x={(h / 24) * CW} y={CH + 14} textAnchor="middle" fontSize={9} fill={S.faint}>
@@ -196,9 +200,14 @@ function PriceChart({ points, threshold }: { points: PricePoint[]; threshold: nu
   );
 }
 
-// ── YES price history chart ────────────────────────────────────────────────────
+// ── YES/NO price history chart ─────────────────────────────────────────────────
 
-function ProbChart({ history }: { history: { prob: number; recorded_at: string }[] }) {
+function ProbChart({ history, side }: { history: { prob: number; recorded_at: string }[]; side: "yes" | "no" }) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; cents: number; ts: string } | null>(null);
+
+  const color = side === "yes" ? S.green : S.red;
+
   if (history.length < 2) return (
     <p style={{ fontSize: "12px", color: S.faint, textAlign: "center", padding: "16px 0" }}>
       Price history will appear here as the market updates.
@@ -221,10 +230,10 @@ function ProbChart({ history }: { history: { prob: number; recorded_at: string }
     return PCH - prob * PCH;
   }
 
+  const getValue = (p: { prob: number }) => side === "yes" ? p.prob : 1 - p.prob;
   const fiftyY = toY(0.5);
-  const polyline = history.map(p => `${toX(p.recorded_at)},${toY(p.prob)}`).join(" ");
+  const polyline = history.map(p => `${toX(p.recorded_at)},${toY(getValue(p))}`).join(" ");
 
-  // X-axis: show ~4 evenly spaced time labels
   const labelCount = 4;
   const labelTimes = Array.from({ length: labelCount + 1 }, (_, i) => {
     const ts = new Date(t0 + (tRange * i) / labelCount);
@@ -232,45 +241,79 @@ function ProbChart({ history }: { history: { prob: number; recorded_at: string }
       x: (i / labelCount) * PCW,
       label: ts.toLocaleTimeString("en-US", {
         timeZone: "America/New_York",
-        month: "short", day: "numeric",
         hour: "numeric", minute: "2-digit",
         hour12: true,
       }).replace(":00", ""),
     };
   });
 
+  function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const rawX = e.clientX - rect.left - PP.left;
+    const clampedX = Math.max(0, Math.min(PCW, rawX));
+    const hoverT = t0 + (clampedX / PCW) * tRange;
+    let nearest = history[0];
+    let minDist = Infinity;
+    for (const p of history) {
+      const d = Math.abs(new Date(p.recorded_at).getTime() - hoverT);
+      if (d < minDist) { minDist = d; nearest = p; }
+    }
+    const val = getValue(nearest);
+    setTooltip({ x: toX(nearest.recorded_at), y: toY(val), cents: Math.round(val * 100), ts: nearest.recorded_at });
+  }
+
+  const BOX_W = 90, BOX_H = 36;
+
   return (
-    <svg width={PW} height={PH} style={{ display: "block", overflow: "visible" }}>
+    <svg ref={svgRef} width={PW} height={PH}
+      style={{ display: "block", overflow: "visible", cursor: "crosshair" }}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => setTooltip(null)}
+    >
       <g transform={`translate(${PP.left},${PP.top})`}>
-        {/* Y gridlines at 25, 50, 75 */}
         {[0.25, 0.5, 0.75].map(v => {
           const y = toY(v);
           return (
             <g key={v}>
-              <line x1={0} y1={y} x2={PCW} y2={y} stroke={S.border} strokeWidth={v === 0.5 ? 1 : 0.5} strokeDasharray={v === 0.5 ? "none" : "3 3"} />
+              <line x1={0} y1={y} x2={PCW} y2={y} stroke={S.border} strokeWidth={v === 0.5 ? 1 : 0.5} strokeDasharray={v === 0.5 ? undefined : "3 3"} />
               <text x={-4} y={y + 3.5} textAnchor="end" fontSize={9} fill={S.faint}>{Math.round(v * 100)}¢</text>
             </g>
           );
         })}
-
-        {/* 50¢ reference label */}
         <text x={PCW + 4} y={fiftyY + 3.5} fontSize={9} fill={S.faint}>50¢</text>
-
-        {/* YES price line */}
-        <polyline points={polyline} fill="none" stroke={S.blue} strokeWidth={1.5} strokeLinejoin="round" />
-
-        {/* Latest dot */}
+        <polyline points={polyline} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" />
         <circle
           cx={toX(history[history.length - 1].recorded_at)}
-          cy={toY(history[history.length - 1].prob)}
-          r={3} fill={S.blue}
+          cy={toY(getValue(history[history.length - 1]))}
+          r={3} fill={color}
         />
-
-        {/* X axis */}
         <line x1={0} y1={PCH} x2={PCW} y2={PCH} stroke={S.border} strokeWidth={0.5} />
         {labelTimes.map((l, i) => (
           <text key={i} x={l.x} y={PCH + 14} textAnchor="middle" fontSize={8} fill={S.faint}>{l.label}</text>
         ))}
+        {tooltip && (
+          <>
+            <line x1={tooltip.x} y1={0} x2={tooltip.x} y2={PCH} stroke={S.faint} strokeWidth={1} strokeDasharray="3 2" />
+            <circle cx={tooltip.x} cy={tooltip.y} r={4} fill={color} stroke="#fff" strokeWidth={1.5} />
+            {(() => {
+              const boxX = tooltip.x + 8 + BOX_W > PCW ? tooltip.x - 8 - BOX_W : tooltip.x + 8;
+              const boxY = Math.max(0, Math.min(PCH - BOX_H, tooltip.y - BOX_H / 2));
+              const timeLabel = new Date(tooltip.ts).toLocaleTimeString("en-US", {
+                timeZone: "America/New_York",
+                hour: "numeric", minute: "2-digit",
+                hour12: true,
+              });
+              return (
+                <g>
+                  <rect x={boxX} y={boxY} width={BOX_W} height={BOX_H} rx={4} fill="#1f2328" opacity={0.9} />
+                  <text x={boxX + BOX_W / 2} y={boxY + 13} textAnchor="middle" fontSize={9} fill={S.faint}>{timeLabel}</text>
+                  <text x={boxX + BOX_W / 2} y={boxY + 27} textAnchor="middle" fontSize={11} fontWeight="700" fill="#ffffff">{tooltip.cents}¢</text>
+                </g>
+              );
+            })()}
+          </>
+        )}
       </g>
     </svg>
   );
@@ -357,18 +400,24 @@ export default function MarketPage() {
   async function handleSubmit() {
     if (!user || !market || !side) return;
     setSubmitting(true); setError(null); setSuccess(null);
-    const res = await fetch("/api/orders", {
+    const res = await fetch("/api/bet", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         user_id: user.user_id, market_id: market.market_id,
-        side: "buy", contract_type: side,
-        order_type: "market", quantity: qty,
+        contract_type: side, quantity: qty,
       }),
     });
     const data = await res.json();
-    if (!res.ok) { setError(data.error ?? "Something went wrong."); }
-    else { setSuccess("Order placed!"); setSide(null); setQty(1); loadMarket(); }
+    if (!res.ok) {
+      setError(data.error ?? "Something went wrong.");
+    } else {
+      const newUser = { ...user, cash_balance: user.cash_balance - (data.cost ?? 0) };
+      setUser(newUser);
+      localStorage.setItem("user", JSON.stringify(newUser));
+      setSuccess(`Filled! ${qty} ${side.toUpperCase()} contract${qty > 1 ? "s" : ""} at ${Math.round((data.price ?? 0.5) * 100)}¢ each.`);
+      setSide(null); setQty(1); loadMarket();
+    }
     setSubmitting(false);
   }
 
@@ -432,32 +481,6 @@ export default function MarketPage() {
         )}
       </div>
 
-      {/* Price — NYC markets only */}
-      {market.model_prob != null && (() => {
-        const prob     = market.model_prob;
-        const yesCents = Math.round(prob * 100);
-        const noCents  = 100 - yesCents;
-        return (
-          <div className="rounded p-4 mb-5" style={{ background: S.surface, border: `1px solid ${S.border}` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "10px" }}>
-              <p className="text-xs font-medium uppercase tracking-wide" style={{ color: S.faint }}>Price</p>
-              <p style={{ fontSize: "11px", color: S.faint }}>updated every 5 min</p>
-            </div>
-            <div style={{ display: "flex", gap: "24px", marginBottom: "14px" }}>
-              <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: "11px", color: S.green, fontWeight: 600, marginBottom: "2px" }}>YES</p>
-                <p style={{ fontSize: "22px", fontWeight: 700, color: S.green }}>{yesCents}¢</p>
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: "11px", color: S.red, fontWeight: 600, marginBottom: "2px" }}>NO</p>
-                <p style={{ fontSize: "22px", fontWeight: 700, color: S.red }}>{noCents}¢</p>
-              </div>
-            </div>
-            <ProbChart history={probHistory} />
-          </div>
-        );
-      })()}
-
       {/* Price chart */}
       <div className="rounded p-5 mb-5" style={cardStyle}>
         {isToday && (
@@ -513,6 +536,16 @@ export default function MarketPage() {
             </button>
           </div>
 
+          {/* Price history chart for selected side */}
+          {side && (
+            <div className="rounded p-4 mb-4" style={{ background: S.surface, border: `1px solid ${S.border}` }}>
+              <p className="text-xs font-medium uppercase tracking-wide mb-3" style={{ color: S.faint }}>
+                {side.toUpperCase()} Price History
+              </p>
+              <ProbChart history={probHistory} side={side} />
+            </div>
+          )}
+
           {/* Contracts */}
           <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "12px" }}>
             <label style={{ fontSize: "14px", color: S.muted }}>Contracts</label>
@@ -526,25 +559,34 @@ export default function MarketPage() {
           {/* Payout + Execute */}
           {side && (
             <>
-              <div style={{ background: S.elevated, borderRadius: "6px", padding: "10px 14px", marginBottom: "10px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: S.muted, marginBottom: "5px" }}>
-                  <span>Cost</span>
-                  <strong style={{ color: S.text }}>${(qty * 0.50).toFixed(2)}</strong>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: S.muted }}>
-                  <span>Payout if correct</span>
-                  <strong style={{ color: side === "yes" ? S.green : S.red }}>${(qty * 1.00).toFixed(2)}</strong>
-                </div>
-              </div>
-              <button
-                onClick={handleSubmit}
-                disabled={submitting}
-                onMouseEnter={() => setHoverExec(true)}
-                onMouseLeave={() => setHoverExec(false)}
-                style={{ width: "100%", padding: "12px 0", background: side === "yes" ? S.green : S.red, color: "#fff", border: `2px solid ${hoverExec ? (side === "yes" ? "#0d4720" : "#7a0a0f") : (side === "yes" ? S.green : S.red)}`, borderRadius: "6px", fontWeight: 700, fontSize: "14px", cursor: submitting ? "wait" : "pointer", opacity: submitting ? 0.7 : 1, transition: "border-color 0.1s" }}
-              >
-                {submitting ? "Placing…" : `Execute Order · ${side.toUpperCase()}`}
-              </button>
+              {(() => {
+                const betProb = market.model_prob ?? 0.5;
+                const betPrice = side === "yes" ? betProb : 1 - betProb;
+                const betCost  = betPrice * qty;
+                return (
+                  <>
+                    <div style={{ background: S.elevated, borderRadius: "6px", padding: "10px 14px", marginBottom: "10px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: S.muted, marginBottom: "5px" }}>
+                        <span>Cost</span>
+                        <strong style={{ color: S.text }}>${betCost.toFixed(2)}</strong>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: S.muted }}>
+                        <span>Payout if correct</span>
+                        <strong style={{ color: side === "yes" ? S.green : S.red }}>${qty.toFixed(2)}</strong>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleSubmit}
+                      disabled={submitting}
+                      onMouseEnter={() => setHoverExec(true)}
+                      onMouseLeave={() => setHoverExec(false)}
+                      style={{ width: "100%", padding: "12px 0", background: side === "yes" ? S.green : S.red, color: "#fff", border: `2px solid ${hoverExec ? (side === "yes" ? "#0d4720" : "#7a0a0f") : (side === "yes" ? S.green : S.red)}`, borderRadius: "6px", fontWeight: 700, fontSize: "14px", cursor: submitting ? "wait" : "pointer", opacity: submitting ? 0.7 : 1, transition: "border-color 0.1s" }}
+                    >
+                      {submitting ? "Filling…" : `Buy ${qty} ${side.toUpperCase()} · $${betCost.toFixed(2)}`}
+                    </button>
+                  </>
+                );
+              })()}
             </>
           )}
 
