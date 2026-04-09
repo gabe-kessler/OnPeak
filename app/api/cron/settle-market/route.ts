@@ -165,6 +165,13 @@ async function settleMarket(node: string, displayDate: string, settlementValue: 
       `UPDATE markets SET status = 'settled', settlement_value = $1 WHERE market_id = $2`,
       [sv, market_id]
     );
+    // Write final 100c/0c anchor to price history so charts converge correctly at settlement
+    await client.query(
+      `INSERT INTO market_prob_history (market_id, prob, recorded_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT DO NOTHING`,
+      [market_id, yesWins ? 1.0 : 0.0]
+    );
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
